@@ -41,7 +41,6 @@ import (
 	"github.com/runatlantis/atlantis/server/events/locking"
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/runtime"
-	"github.com/runatlantis/atlantis/server/events/runtime/policy"
 	"github.com/runatlantis/atlantis/server/events/terraform"
 	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/vcs/bitbucketcloud"
@@ -350,13 +349,8 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		BitbucketUser:   userConfig.BitbucketUser,
 		AzureDevopsUser: userConfig.AzureDevopsUser,
 	}
-	defaultTfVersion := terraformClient.DefaultVersion()
 	pendingPlanFinder := &events.DefaultPendingPlanFinder{}
-	runStepRunner := &runtime.RunStepRunner{
-		TerraformExecutor: terraformClient,
-		DefaultTFVersion:  defaultTfVersion,
-		TerraformBinDir:   terraformClient.TerraformBinDir(),
-	}
+
 	drainer := &events.Drainer{}
 	statusController := &StatusController{
 		Logger:  logger,
@@ -383,6 +377,19 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		commentParser,
 		userConfig.SkipCloneNoChanges,
 	)
+
+	projectCommandRunner := events.NewProjectCommandRunner(
+		policyChecksEnabled,
+		terraformClient,
+		projectLocker,
+		router,
+		vcsClient,
+		workingDir,
+		webhooksManager,
+		workingDirLocker,
+		commitStatusUpdater,
+	)
+
 	commandRunner := &events.DefaultCommandRunner{
 		VCSClient:                vcsClient,
 		GithubPullGetter:         githubClient,
@@ -401,42 +408,13 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		DisableApplyAll:          userConfig.DisableApplyAll,
 		DisableAutoplan:          userConfig.DisableAutoplan,
 		ProjectCommandBuilder:    projectCommandBuilder,
-		ProjectCommandRunner: &events.DefaultProjectCommandRunner{
-			Locker:           projectLocker,
-			LockURLGenerator: router,
-			InitStepRunner: &runtime.InitStepRunner{
-				TerraformExecutor: terraformClient,
-				DefaultTFVersion:  defaultTfVersion,
-			},
-			PlanStepRunner: &runtime.PlanStepRunner{
-				TerraformExecutor:   terraformClient,
-				DefaultTFVersion:    defaultTfVersion,
-				CommitStatusUpdater: commitStatusUpdater,
-				AsyncTFExec:         terraformClient,
-			},
-			PolicyCheckStepRunner: runtime.NewPolicyCheckStepRunner(
-				policy.NewConfTestExecutorWorkflow(),
-			),
-			ApplyStepRunner: &runtime.ApplyStepRunner{
-				TerraformExecutor:   terraformClient,
-				CommitStatusUpdater: commitStatusUpdater,
-				AsyncTFExec:         terraformClient,
-			},
-			RunStepRunner: runStepRunner,
-			EnvStepRunner: &runtime.EnvStepRunner{
-				RunStepRunner: runStepRunner,
-			},
-			PullApprovedChecker: vcsClient,
-			WorkingDir:          workingDir,
-			Webhooks:            webhooksManager,
-			WorkingDirLocker:    workingDirLocker,
-		},
-		WorkingDir:        workingDir,
-		PendingPlanFinder: pendingPlanFinder,
-		DB:                boltdb,
-		DeleteLockCommand: deleteLockCommand,
-		GlobalAutomerge:   userConfig.Automerge,
-		Drainer:           drainer,
+		ProjectCommandRunner:     projectCommandRunner,
+		WorkingDir:               workingDir,
+		PendingPlanFinder:        pendingPlanFinder,
+		DB:                       boltdb,
+		DeleteLockCommand:        deleteLockCommand,
+		GlobalAutomerge:          userConfig.Automerge,
+		Drainer:                  drainer,
 	}
 	repoAllowlist, err := events.NewRepoAllowlistChecker(userConfig.RepoAllowlist)
 	if err != nil {
